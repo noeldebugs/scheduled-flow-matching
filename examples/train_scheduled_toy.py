@@ -60,8 +60,12 @@ def parse_args():
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--device", type=str, default="auto")
 
-    parser.add_argument("--target", choices=["8gaussians", "moons"], default="8gaussians")
-    parser.add_argument("--matcher", choices=["ot", "independent"], default="ot")
+    parser.add_argument(
+        "--target", choices=["8gaussians", "moons"], default="8gaussians"
+    )
+    parser.add_argument(
+        "--matcher", choices=["ot", "independent"], default="ot"
+    )
     parser.add_argument(
         "--ot-method",
         choices=["exact", "sinkhorn", "unbalanced", "partial"],
@@ -85,7 +89,9 @@ def parse_args():
     parser.add_argument("--log-every", type=int, default=500)
     parser.add_argument("--eval-samples", type=int, default=2048)
     parser.add_argument("--integration-steps", type=int, default=100)
-    parser.add_argument("--output-dir", type=Path, default=Path("results/scheduled_toy"))
+    parser.add_argument(
+        "--output-dir", type=Path, default=Path("results/scheduled_toy")
+    )
     parser.add_argument("--no-plot", action="store_true")
     parser.add_argument("--checkpoint-path", type=Path, default=None)
     return parser.parse_args()
@@ -116,7 +122,9 @@ def build_schedule(args):
 
 def build_matcher(args, schedule):
     if args.matcher == "independent":
-        return ScheduledConditionalFlowMatcher(sigma=args.sigma, schedule=schedule)
+        return ScheduledConditionalFlowMatcher(
+            sigma=args.sigma, schedule=schedule
+        )
     if args.matcher == "ot":
         return ScheduledExactOptimalTransportConditionalFlowMatcher(
             sigma=args.sigma,
@@ -146,7 +154,9 @@ def schedule_regularization(schedule, smoothness_weight, speed_l2_weight):
 @torch.no_grad()
 def euler_integrate(model, x0, num_steps):
     x = x0.clone()
-    t_grid = torch.linspace(0.0, 1.0, num_steps + 1, device=x.device, dtype=x.dtype)
+    t_grid = torch.linspace(
+        0.0, 1.0, num_steps + 1, device=x.device, dtype=x.dtype
+    )
     for i in range(num_steps):
         t = t_grid[i].expand(x.shape[0])
         dt = t_grid[i + 1] - t_grid[i]
@@ -240,7 +250,7 @@ def save_outputs(args, model, schedule, device):
         ax.set_aspect("equal")
         ax.set_xticks([])
         ax.set_yticks([])
-    fig.savefig(args.output_dir / "samples.png", dpi=200)
+    fig.savefig(args.output_dir / "samples_sigmoid.png", dpi=200)
     plt.close(fig)
 
     t, tau, tau_dot = sample_schedule(schedule, device=device)
@@ -249,7 +259,7 @@ def save_outputs(args, model, schedule, device):
     axes[0].set_title("tau(t)")
     axes[1].plot(t, tau_dot)
     axes[1].set_title("tau_dot(t)")
-    fig.savefig(args.output_dir / "schedule.png", dpi=200)
+    fig.savefig(args.output_dir / "schedule_sigmoid.png", dpi=200)
     plt.close(fig)
 
 
