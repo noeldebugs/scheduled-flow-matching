@@ -190,10 +190,7 @@ def train(args):
         optimizer.step()
 
         if step == 1 or step % args.log_every == 0:
-            print(
-                f"step {step:05d} | loss {loss.item():.6f} | "
-                f"flow {flow_loss.item():.6f}"
-            )
+            print(f"step {step:05d} | loss {loss.item():.6f} | flow {flow_loss.item():.6f}")
 
     return model, schedule
 
@@ -263,3 +260,37 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# Test all schedules on the 8 Gaussians target with OT matching.
+# python examples/train_scheduled_toy.py --steps 5000 --schedule identity --matcher ot --target 8gaussians
+# python examples/train_scheduled_toy.py --steps 5000 --schedule power --matcher ot --target 8gaussians
+# python examples/train_scheduled_toy.py --steps 5000 --schedule logistic --matcher ot --target 8gaussians
+# python examples/train_scheduled_toy.py --steps 5000 --schedule learnable --matcher ot --target 8gaussians
+
+# Test all schedules on the two half moons target with OT matching.
+# python examples/train_scheduled_toy.py --steps 5000 --schedule identity --matcher ot --target moons
+# python examples/train_scheduled_toy.py --steps 5000 --schedule power --matcher ot --target moons
+# python examples/train_scheduled_toy.py --steps 5000 --schedule logistic --matcher ot --target moons
+# python examples/train_scheduled_toy.py --steps 5000 --schedule learnable --matcher ot --target moons
+
+# Compare OT versus independent matching on 8 Gaussians using the learnable logistic schedule.
+# python examples/train_scheduled_toy.py --steps 5000 --schedule logistic --matcher ot --target 8gaussians
+# python examples/train_scheduled_toy.py --steps 5000 --schedule logistic --matcher independent --target 8gaussians
+
+# Compare OT versus independent matching on moons using the learnable logistic schedule.
+# python examples/train_scheduled_toy.py --steps 5000 --schedule logistic --matcher ot --target moons
+# python examples/train_scheduled_toy.py --steps 5000 --schedule logistic --matcher independent --target moons
+
+# Test learnable power schedule with different initial alpha values on moons.
+# python examples/train_scheduled_toy.py --steps 5000 --schedule power --power-alpha 1.0 --matcher ot --target moons
+# python examples/train_scheduled_toy.py --steps 5000 --schedule power --power-alpha 2.0 --matcher ot --target moons
+# python examples/train_scheduled_toy.py --steps 5000 --schedule power --power-alpha 0.5 --matcher ot --target moons
+
+# Test learnable logistic schedule with different initial steepness values on moons.
+# python examples/train_scheduled_toy.py --steps 5000 --schedule logistic --logistic-k 2.0 --logistic-c 0.5 --matcher ot --target moons
+# python examples/train_scheduled_toy.py --steps 5000 --schedule logistic --logistic-k 8.0 --logistic-c 0.5 --matcher ot --target moons
+# python examples/train_scheduled_toy.py --steps 5000 --schedule logistic --logistic-k 16.0 --logistic-c 0.5 --matcher ot --target moons
+
+# Test learnable logistic schedule with different initial center locations on moons.
+# python examples/train_scheduled_toy.py --steps 5000 --schedule logistic --logistic-k 8.0 --logistic-c 0.35 --matcher ot --target moons
+# python examples/train_scheduled_toy.py --steps 5000 --schedule logistic --logistic-k 8.0 --logistic-c 0.65 --matcher ot --target moons
