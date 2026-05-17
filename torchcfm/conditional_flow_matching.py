@@ -7,11 +7,12 @@
 
 import math
 import warnings
-from typing import Union
+from typing import Optional, Union
 
 import torch
 
 from .optimal_transport import OTPlanSampler
+from .schedules import IdentitySchedule, Schedule
 
 
 def pad_t_like_x(t, x):
@@ -49,19 +50,26 @@ class ConditionalFlowMatcher:
     - score function $\nabla log p_t(x|x0, x1)$
     """
 
-    def __init__(self, sigma: Union[float, int] = 0.0):
+    def __init__(self, sigma: Union[float, int] = 0.0, schedule: Optional[Schedule] = None):
         r"""Initialize the ConditionalFlowMatcher class.
 
-        It requires the hyper-parameter $\sigma$.
-                Parameters
-                ----------
-                sigma : Union[float, int]
+        Parameters
+        ----------
+        sigma : Union[float, int]
+        schedule : Schedule, optional
+            Time schedule τ: [0,1] → [0,1]. Defaults to IdentitySchedule(),
+            which reproduces standard CFM exactly. See torchcfm.schedules for
+            available schedules, e.g. SigmoidSchedule.
         """
         self.sigma = sigma
+        self.schedule = schedule if schedule is not None else IdentitySchedule()
 
     def compute_mu_t(self, x0, x1, t):
         """
-        Compute the mean of the probability path N(t * x1 + (1 - t) * x0, sigma), see (Eq.14) [1].
+        Compute the mean of the probability path N(τ(t)·x1 + (1-τ(t))·x0, sigma), see (Eq.14) [1].
+
+        With a non-identity schedule τ, the interpolant traverses the segment
+        at a non-uniform speed; τ̇(t) appears in the velocity target instead.
 
         Parameters
         ----------
@@ -73,14 +81,14 @@ class ConditionalFlowMatcher:
 
         Returns
         -------
-        mean mu_t: t * x1 + (1 - t) * x0
+        mean mu_t: τ(t) * x1 + (1 - τ(t)) * x0
 
         References
         ----------
         [1] Improving and Generalizing Flow-Based Generative Models with minibatch optimal transport, Preprint, Tong et al.
         """
-        t = pad_t_like_x(t, x0)
-        return t * x1 + (1 - t) * x0
+        tau_t = pad_t_like_x(self.schedule.tau(t), x0)
+        return tau_t * x1 + (1 - tau_t) * x0
 
     def compute_sigma_t(self, t):
         """
@@ -130,7 +138,11 @@ class ConditionalFlowMatcher:
 
     def compute_conditional_flow(self, x0, x1, t, xt):
         """
-        Compute the conditional vector field ut(x1|x0) = x1 - x0, see Eq.(15) [1].
+        Compute the conditional vector field ut(x1|x0) = τ̇(t)·(x1 - x0), see Eq.(15) [1].
+
+        With a time schedule τ the velocity target is rescaled by τ̇(t) so that
+        the model learns the correct time-derivative of the scheduled interpolant.
+        With IdentitySchedule, τ̇(t) = 1 and this reduces to x1 - x0.
 
         Parameters
         ----------
@@ -144,14 +156,15 @@ class ConditionalFlowMatcher:
 
         Returns
         -------
-        ut : conditional vector field ut(x1|x0) = x1 - x0
+        ut : conditional vector field ut(x1|x0) = τ̇(t)·(x1 - x0)
 
         References
         ----------
         [1] Improving and Generalizing Flow-Based Generative Models with minibatch optimal transport, Preprint, Tong et al.
         """
-        del t, xt
-        return x1 - x0
+        del xt
+        tau_dot_t = pad_t_like_x(self.schedule.tau_dot(t), x0)
+        return tau_dot_t * (x1 - x0)
 
     def sample_noise_like(self, x):
         return torch.randn_like(x)
@@ -226,16 +239,18 @@ class ExactOptimalTransportConditionalFlowMatcher(ConditionalFlowMatcher):
     It overrides the sample_location_and_conditional_flow.
     """
 
-    def __init__(self, sigma: Union[float, int] = 0.0):
-        r"""Initialize the ConditionalFlowMatcher class.
+    def __init__(self, sigma: Union[float, int] = 0.0, schedule: Optional[Schedule] = None):
+        r"""Initialize the ExactOptimalTransportConditionalFlowMatcher class.
 
-        It requires the hyper-parameter $\sigma$.
-                Parameters
-                ----------
-                sigma : Union[float, int]
-                ot_sampler: exact OT method to draw couplings (x0, x1) (see Eq.(17) [1]).
+        Parameters
+        ----------
+        sigma : Union[float, int]
+        schedule : Schedule, optional
+            Time schedule τ: [0,1] → [0,1]. See torchcfm.schedules.
+            Defaults to IdentitySchedule() (standard OT-CFM).
+        ot_sampler: exact OT method to draw couplings (x0, x1) (see Eq.(17) [1]).
         """
-        super().__init__(sigma)
+        super().__init__(sigma, schedule)
         self.ot_sampler = OTPlanSampler(method="exact")
 
     def sample_location_and_conditional_flow(self, x0, x1, t=None, return_noise=False):
@@ -326,6 +341,28 @@ class TargetConditionalFlowMatcher(ConditionalFlowMatcher):
     [2] Flow Matching for Generative Modelling, ICLR, Lipman et al.
     """
 
+    def __init__(self, sigma: Union[float, int] = 0.0, schedule: Optional[Schedule] = None):
+        r"""Initialize the TargetConditionalFlowMatcher class.
+
+        Parameters
+        ----------
+        sigma : Union[float, int]
+        schedule : Schedule, optional
+            Must be IdentitySchedule or None. TargetConditionalFlowMatcher uses the
+            Lipman et al. 2023 interpolant (mu_t = t·x1), which is incompatible with
+            the linear-interpolant scheduling from Tsimpos et al. 2024. Use
+            ConditionalFlowMatcher or ExactOptimalTransportConditionalFlowMatcher for
+            scheduled training.
+        """
+        if schedule is not None and not isinstance(schedule, IdentitySchedule):
+            raise NotImplementedError(
+                "TargetConditionalFlowMatcher uses the Lipman et al. (2023) interpolant "
+                "(mu_t = t·x1), which is incompatible with time scheduling. "
+                "Use ConditionalFlowMatcher or ExactOptimalTransportConditionalFlowMatcher "
+                "with a schedule instead, or pass schedule=IdentitySchedule()."
+            )
+        super().__init__(sigma, schedule)
+
     def compute_mu_t(self, x0, x1, t):
         """Compute the mean of the probability path tx1, see (Eq.20) [2].
 
@@ -404,10 +441,13 @@ class SchrodingerBridgeConditionalFlowMatcher(ConditionalFlowMatcher):
     sample_location_and_conditional_flow functions.
     """
 
-    def __init__(self, sigma: Union[float, int] = 1.0, ot_method="exact"):
+    def __init__(
+        self,
+        sigma: Union[float, int] = 1.0,
+        ot_method="exact",
+        schedule: Optional[Schedule] = None,
+    ):
         r"""Initialize the SchrodingerBridgeConditionalFlowMatcher class.
-
-        It requires the hyper- parameter $\sigma$ and the entropic OT map.
 
         Parameters
         ----------
@@ -417,19 +457,28 @@ class SchrodingerBridgeConditionalFlowMatcher(ConditionalFlowMatcher):
             (more accurate and faster) in practice for reasonable batch sizes.
             We note that as batchsize --> infinity the correct choice is the
             sinkhorn method theoretically.
+        schedule : Schedule, optional
+            Time schedule τ: [0,1] → [0,1]. The interpolant and sigma_t are
+            reparameterized via τ(t). Note: the paper's optimality guarantees
+            are for OT-CFM; for SB-CFM this is a heuristic extension.
+            Defaults to IdentitySchedule().
         """
         if sigma <= 0:
             raise ValueError(f"Sigma must be strictly positive, got {sigma}.")
         elif sigma < 1e-3:
             warnings.warn("Small sigma values may lead to numerical instability.")
-        super().__init__(sigma)
+        super().__init__(sigma, schedule)
         self.ot_method = ot_method
         self.ot_sampler = OTPlanSampler(method=ot_method, reg=2 * self.sigma**2)
 
     def compute_sigma_t(self, t):
         """
-        Compute the standard deviation of the probability path N(t * x1 + (1 - t) * x0, sqrt(t * (1 - t))*sigma^2),
-        see (Eq.20) [1].
+        Compute the standard deviation σ·√(τ(t)·(1−τ(t))), see (Eq.20) [1].
+
+        With a time schedule τ the bridge width is evaluated at τ(t) rather
+        than t, so the path geometry is consistent with the scheduled interpolant.
+        Note: the paper's optimality guarantees are for OT-CFM; this extension
+        to SB-CFM is a heuristic.
 
         Parameters
         ----------
@@ -437,19 +486,24 @@ class SchrodingerBridgeConditionalFlowMatcher(ConditionalFlowMatcher):
 
         Returns
         -------
-        standard deviation sigma
+        standard deviation σ·√(τ(t)·(1−τ(t)))
 
         References
         ----------
         [1] Improving and Generalizing Flow-Based Generative Models with minibatch optimal transport, Preprint, Tong et al.
         """
-        return self.sigma * torch.sqrt(t * (1 - t))
+        tau_t = self.schedule.tau(t)
+        return self.sigma * torch.sqrt(tau_t * (1 - tau_t))
 
     def compute_conditional_flow(self, x0, x1, t, xt):
-        """Compute the conditional vector field.
+        """Compute the conditional vector field with time scheduling.
 
-        ut(x1|x0) = (1 - 2 * t) / (2 * t * (1 - t)) * (xt - mu_t) + x1 - x0,
-        see Eq.(21) [1].
+        With schedule τ, sigma_t = σ·√(τ(t)·(1−τ(t))), so:
+
+            σ_t'/σ_t = τ̇(t)·(1 − 2·τ(t)) / (2·τ(t)·(1−τ(t)))
+            ut = τ̇(t)·(x1 − x0) + σ_t'/σ_t · (xt − μ_t)
+
+        With IdentitySchedule (τ(t)=t, τ̇=1) this reduces to Eq.(21) [1].
 
         Parameters
         ----------
@@ -464,7 +518,7 @@ class SchrodingerBridgeConditionalFlowMatcher(ConditionalFlowMatcher):
         Returns
         -------
         ut : conditional vector field
-        ut(x1|x0) = (1 - 2 * t) / (2 * t * (1 - t)) * (xt - mu_t) + x1 - x0
+        ut(x1|x0) = τ̇·(x1−x0) + τ̇·(1−2τ)/(2τ(1−τ)) · (xt − μ_t)
 
         References
         ----------
@@ -472,9 +526,11 @@ class SchrodingerBridgeConditionalFlowMatcher(ConditionalFlowMatcher):
         with minibatch optimal transport, Preprint, Tong et al.
         """
         t = pad_t_like_x(t, x0)
+        tau_t = self.schedule.tau(t)
+        tau_dot_t = self.schedule.tau_dot(t)
         mu_t = self.compute_mu_t(x0, x1, t)
-        sigma_t_prime_over_sigma_t = (1 - 2 * t) / (2 * t * (1 - t) + 1e-8)
-        ut = sigma_t_prime_over_sigma_t * (xt - mu_t) + x1 - x0
+        sigma_t_prime_over_sigma_t = tau_dot_t * (1 - 2 * tau_t) / (2 * tau_t * (1 - tau_t) + 1e-8)
+        ut = sigma_t_prime_over_sigma_t * (xt - mu_t) + tau_dot_t * (x1 - x0)
         return ut
 
     def sample_location_and_conditional_flow(self, x0, x1, t=None, return_noise=False):
@@ -565,6 +621,28 @@ class VariancePreservingConditionalFlowMatcher(ConditionalFlowMatcher):
 
     [3] Stochastic Interpolants: A Unifying Framework for Flows and Diffusions, Albergo et al.
     """
+
+    def __init__(self, sigma: Union[float, int] = 0.0, schedule: Optional[Schedule] = None):
+        r"""Initialize the VariancePreservingConditionalFlowMatcher class.
+
+        Parameters
+        ----------
+        sigma : Union[float, int]
+        schedule : Schedule, optional
+            Must be IdentitySchedule or None. VariancePreservingConditionalFlowMatcher uses
+            trigonometric interpolants (Albergo et al. 2023), which are incompatible with
+            the linear-interpolant scheduling from Tsimpos et al. 2024. Use
+            ConditionalFlowMatcher or ExactOptimalTransportConditionalFlowMatcher for
+            scheduled training.
+        """
+        if schedule is not None and not isinstance(schedule, IdentitySchedule):
+            raise NotImplementedError(
+                "VariancePreservingConditionalFlowMatcher uses trigonometric interpolants "
+                "(Albergo et al. 2023), which are incompatible with time scheduling. "
+                "Use ConditionalFlowMatcher or ExactOptimalTransportConditionalFlowMatcher "
+                "with a schedule instead, or pass schedule=IdentitySchedule()."
+            )
+        super().__init__(sigma, schedule)
 
     def compute_mu_t(self, x0, x1, t):
         r"""Compute the mean of the probability path (Eq.5) from [3].
