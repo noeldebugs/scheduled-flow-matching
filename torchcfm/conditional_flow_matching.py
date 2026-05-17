@@ -12,26 +12,20 @@ from typing import Union
 import torch
 
 from .optimal_transport import OTPlanSampler
+from .schedules import BaseSchedule, IdentitySchedule
 
 
-def pad_t_like_x(t, x):
-    """Function to reshape the time vector t by the number of dimensions of x.
+def pad_t_like_x(t, x) -> Union[torch.Tensor, float, int]:
+    """Reshape a time vector t to broadcast like x.
 
     Parameters
     ----------
+    t : Tensor, shape (bs,)
     x : Tensor, shape (bs, *dim)
-        represents the source minibatch
-    t : FloatTensor, shape (bs)
 
     Returns
     -------
-    t : Tensor, shape (bs, number of x dimensions)
-
-    Example
-    -------
-    x: Tensor (bs, C, W, H)
-    t: Vector (bs)
-    pad_t_like_x(t, x): Tensor (bs, 1, 1, 1)
+    Tensor, shape (bs, 1, ..., 1)
     """
     if isinstance(t, (float, int)):
         return t
@@ -217,6 +211,32 @@ class ConditionalFlowMatcher:
         return 2 * sigma_t / (self.sigma**2 + 1e-8)
 
 
+class ScheduledConditionalFlowMatcher(ConditionalFlowMatcher):
+    """Conditional Flow Matcher with scheduled linear interpolation.
+
+    The path is:
+        X_t^tau = (1 - tau(t)) x0 + tau(t) x1
+
+    The conditional target velocity is:
+        u_t^tau = tau_dot(t) * (x1 - x0)
+    """
+
+    def __init__(self, sigma: Union[float, int] = 0.0, schedule: BaseSchedule = None):
+        super().__init__(sigma=sigma)
+        self.schedule = schedule if schedule is not None else IdentitySchedule()
+
+    def compute_mu_t(self, x0, x1, t):
+        tau_t = self.schedule.tau(t)
+        tau_t = pad_t_like_x(tau_t, x0)
+        return tau_t * x1 + (1.0 - tau_t) * x0
+
+    def compute_conditional_flow(self, x0, x1, t, xt):
+        del xt
+        tau_dot_t = self.schedule.tau_dot(t)
+        tau_dot_t = pad_t_like_x(tau_dot_t, x0)
+        return tau_dot_t * (x1 - x0)
+
+
 class ExactOptimalTransportConditionalFlowMatcher(ConditionalFlowMatcher):
     """Child class for optimal transport conditional flow matching method.
 
@@ -313,6 +333,43 @@ class ExactOptimalTransportConditionalFlowMatcher(ConditionalFlowMatcher):
             return t, xt, ut, y0, y1, eps
         else:
             t, xt, ut = super().sample_location_and_conditional_flow(x0, x1, t, return_noise)
+            return t, xt, ut, y0, y1
+
+
+class ScheduledExactOptimalTransportConditionalFlowMatcher(ScheduledConditionalFlowMatcher):
+    """Scheduled version of exact OT-CFM.
+
+    First samples pairs (x0, x1) from the minibatch OT plan, then applies
+    scheduled conditional flow matching.
+    """
+
+    def __init__(
+        self,
+        sigma: Union[float, int] = 0.0,
+        schedule: BaseSchedule = None,
+        ot_method: str = "exact",
+        **ot_kwargs,
+    ):
+        super().__init__(sigma=sigma, schedule=schedule)
+        self.ot_sampler = OTPlanSampler(method=ot_method, **ot_kwargs)
+
+    def sample_location_and_conditional_flow(self, x0, x1, t=None, return_noise=False):
+        x0, x1 = self.ot_sampler.sample_plan(x0, x1)
+        return super().sample_location_and_conditional_flow(x0, x1, t, return_noise)
+
+    def guided_sample_location_and_conditional_flow(
+        self, x0, x1, y0=None, y1=None, t=None, return_noise=False
+    ):
+        x0, x1, y0, y1 = self.ot_sampler.sample_plan_with_labels(x0, x1, y0, y1)
+        if return_noise:
+            t, xt, ut, eps = super().sample_location_and_conditional_flow(
+                x0, x1, t, return_noise
+            )
+            return t, xt, ut, y0, y1, eps
+        else:
+            t, xt, ut = super().sample_location_and_conditional_flow(
+                x0, x1, t, return_noise
+            )
             return t, xt, ut, y0, y1
 
 
