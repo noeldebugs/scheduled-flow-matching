@@ -41,6 +41,34 @@ def sample_8gaussians(n):
     return eight_normal_sample(n, 2, scale=5, var=0.1).float()
 
 
+def sample_1d_crossing(n: int) -> torch.Tensor:
+    """1D bimodal ↔ bimodal crossing benchmark.
+
+    Both source and target are the same bimodal distribution
+    (0.5·N(−2, 0.3²) + 0.5·N(2, 0.3²)).  Under independent coupling, flow
+    paths from the left mode to the right mode (and vice-versa) cross each
+    other at the midpoint — illustrating the crossing problem in 1D.
+    """
+    which = torch.bernoulli(torch.full((n,), 0.5)).bool()
+    samples = torch.where(
+        which,
+        torch.randn(n) * 0.3 - 2.0,
+        torch.randn(n) * 0.3 + 2.0,
+    )
+    return samples.unsqueeze(1)
+
+
+def sample_1d_gmm(n: int) -> torch.Tensor:
+    """1D 5-component Gaussian mixture target (source is N(0,1)).
+
+    Modes at [−4, −2, 0, 2, 4] with σ = 0.4, equal weights.
+    """
+    centers = torch.tensor([-4.0, -2.0, 0.0, 2.0, 4.0])
+    which = torch.multinomial(torch.ones(5), n, replacement=True)
+    samples = centers[which] + torch.randn(n) * 0.4
+    return samples.unsqueeze(1)
+
+
 class torch_wrapper(torch.nn.Module):
     """Wraps model to torchdyn compatible format."""
 
