@@ -178,3 +178,4 @@ notebooks/figures/
 # Branch-specific ignore rules
 papers/
 CLAUDE.md
+uv.lock

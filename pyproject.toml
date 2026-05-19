@@ -37,3 +37,8 @@ select = ["C", "E", "F", "I", "W"]
 [tool.ruff.lint.isort]
 known-first-party = ["src"]
 known-third-party = ["torch", "transformers", "wandb"]
+
+[dependency-groups]
+dev = [
+    "ipykernel>=7.2.0",
+]
